@@ -47,10 +47,11 @@ const ROLE_ICON: Record<string, string> = {
 };
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3010';
-// WS connects to same host/port as the page in browser; fallback for SSR
-const WS_URL = typeof window !== 'undefined'
-  ? `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname}:3010/ws`
-  : 'ws://localhost:3010/ws';
+const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:3010/ws';
+
+const fetchOpts: RequestInit = {
+  headers: { 'ngrok-skip-browser-warning': 'true' },
+};
 
 export default function Dashboard() {
   const [agents, setAgents]     = useState<AgentStatus[]>([]);
@@ -91,14 +92,14 @@ export default function Dashboard() {
   }
 
   async function fetchAgents() {
-    const resp = await fetch(`${API}/api/agents`).catch(() => null);
+    const resp = await fetch(`${API}/api/agents`, fetchOpts).catch(() => null);
     if (!resp?.ok) return;
     const data = await resp.json() as any;
     setAgents(data.agents ?? []);
   }
 
   async function fetchMetrics() {
-    const resp = await fetch(`${API}/api/metrics`).catch(() => null);
+    const resp = await fetch(`${API}/api/metrics`, fetchOpts).catch(() => null);
     if (!resp?.ok) return;
     const data = await resp.json() as any;
     setMetrics(data);
@@ -106,7 +107,7 @@ export default function Dashboard() {
   }
 
   async function fetchEvents() {
-    const resp = await fetch(`${API}/api/events`).catch(() => null);
+    const resp = await fetch(`${API}/api/events`, fetchOpts).catch(() => null);
     if (!resp?.ok) return;
     const data = await resp.json() as any;
     setEvents(data.events ?? []);
