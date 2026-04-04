@@ -1,0 +1,25 @@
+FROM node:20-alpine AS deps
+WORKDIR /app
+COPY package.json tsconfig.json ./
+COPY shared/ ./shared/
+COPY ui/package.json ./ui/package.json
+RUN npm install --workspace=ui --include-workspace-root
+
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/package.json ./package.json
+COPY --from=deps /app/tsconfig.json ./tsconfig.json
+COPY shared/ ./shared/
+COPY ui/ ./ui/
+RUN npm run build --workspace=ui
+
+FROM node:20-alpine AS runner
+WORKDIR /app/ui
+ENV NODE_ENV=production
+COPY --from=builder /app/ui/.next ./.next
+COPY --from=builder /app/node_modules ../node_modules
+COPY --from=builder /app/ui/package.json ./package.json
+
+EXPOSE 3002
+CMD ["../node_modules/.bin/next", "start", "-p", "3002"]

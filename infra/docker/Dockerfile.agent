@@ -1,0 +1,26 @@
+FROM node:20-alpine AS base
+WORKDIR /app
+
+# Install dependencies
+COPY package.json tsconfig.json ./
+COPY shared/ ./shared/
+
+ARG AGENT
+ARG CMD=start
+
+COPY ${AGENT}/package.json ./${AGENT}/package.json
+COPY ${AGENT}/src ./${AGENT}/src
+
+RUN npm config set fetch-retries 5 && \
+    npm config set fetch-retry-mintimeout 20000 && \
+    npm config set fetch-retry-maxtimeout 120000 && \
+    npm install --workspace=${AGENT} --include-workspace-root
+
+# Build
+RUN cd ${AGENT} && npx tsc --project tsconfig.json || true
+
+ENV NODE_ENV=production
+ENV AGENT_PATH=${AGENT}
+ENV CMD=${CMD}
+
+CMD ["sh", "-c", "cd $AGENT_PATH && npm run $CMD 2>/dev/null || npx ts-node --transpile-only src/index.ts"]

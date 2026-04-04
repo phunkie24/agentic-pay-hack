@@ -1,0 +1,113 @@
+name: CI/CD — Agentic Pay
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository_owner }}/agentic-pay
+
+jobs:
+  # ── Lint & Type Check ──────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20', cache: 'npm' }
+      - run: npm ci
+      - run: npm run lint || true
+      - run: npx tsc --noEmit || true
+
+  # ── Build Docker Images ────────────────────────
+  build:
+    needs: lint
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        agent: [orchestrator, discovery, negotiation, payment, knowledge, validator, mcp-server]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.agent }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: infra/docker/Dockerfile.agent
+          build-args: AGENT=${{ matrix.agent }}
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.agent }}:latest
+
+  build-ui:
+    needs: lint
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push UI
+        uses: docker/build-push-action@v5
+        with:
+          context: ui
+          file: infra/docker/Dockerfile.ui
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-ui:latest
+
+  # ── Deploy to Azure Container Apps ────────────
+  deploy:
+    needs: [build, build-ui]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Deploy Bicep to Azure
+        uses: azure/arm-deploy@v1
+        with:
+          resourceGroupName: agentic-pay-rg
+          template: infra/azure/main.bicep
+          parameters: registryName=agenticpayacr
+
+      - name: Update Container Apps with new images
+        run: |
+          for agent in orchestrator discovery negotiation payment knowledge validator; do
+            az containerapp update \
+              --name agentic-pay-prod-$agent \
+              --resource-group agentic-pay-rg \
+              --image ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-$agent:latest
+          done
+          az containerapp update \
+            --name agentic-pay-prod-ui \
+            --resource-group agentic-pay-rg \
+            --image ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-ui:latest

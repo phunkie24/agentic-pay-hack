@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+**/dist/
+.next/
+**/.next/
+*.js.map
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.env.local
+*.env.*.local
+.env.wallets
+**/.env
+**/.env.*
+!**/.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes (local only)
+infra/docker/data/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Editor
+.vscode/settings.json
+.idea/

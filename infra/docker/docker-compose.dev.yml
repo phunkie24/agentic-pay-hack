@@ -1,0 +1,207 @@
+version: '3.9'
+
+# Shared agent URL overrides so containers reach each other by service name
+x-agent-urls: &agent-urls
+  ORCHESTRATOR_URL: http://orchestrator:4000
+  DISCOVERY_URL:    http://discovery:4001
+  NEGOTIATION_URL:  http://negotiation:4002
+  PAYMENT_URL:      http://payment:4003
+  KNOWLEDGE_URL:    http://knowledge:4004
+  VALIDATOR_URL:    http://validator:4005
+
+x-infra-urls: &infra-urls
+  REDIS_URL:     redis://redis:6379
+  DATABASE_URL:  postgresql://postgres:postgres@postgres:5432/agenticpay
+  CHROMA_URL:    http://chromadb:8000
+
+services:
+  # ── Infrastructure ──────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    command: redis-server --appendonly yes
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+
+  chromadb:
+    image: chromadb/chroma:latest
+    ports: ["8000:8000"]
+    volumes: [chroma-data:/chroma/chroma]
+    environment:
+      - CHROMA_SERVER_HOST=0.0.0.0
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/8000"]
+      interval: 10s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    ports: ["5432:5432"]
+    environment:
+      POSTGRES_DB: agenticpay
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes: [pg-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      retries: 5
+
+  # ── MCP Server ──────────────────────────────────
+  mcp-server:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.agent
+      args: [AGENT=mcp-server]
+    ports: ["3001:3001"]
+    env_file: [../../.env]
+    environment:
+      <<: [*agent-urls, *infra-urls]
+      MCP_SERVER_PORT: 3001
+    depends_on:
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+
+  # ── AI Agents ───────────────────────────────────
+  orchestrator:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.agent
+      args: [AGENT=agents/orchestrator]
+    ports: ["4000:4000"]
+    env_file: [../../.env]
+    environment:
+      <<: [*agent-urls, *infra-urls]
+    depends_on:
+      redis: {condition: service_healthy}
+      discovery: {condition: service_started}
+    restart: unless-stopped
+
+  discovery:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.agent
+      args: [AGENT=agents/discovery]
+    ports: ["4001:4001"]
+    env_file: [../../.env]
+    environment:
+      <<: [*agent-urls, *infra-urls]
+    depends_on:
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+
+  negotiation:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.agent
+      args: [AGENT=agents/negotiation]
+    ports: ["4002:4002"]
+    env_file: [../../.env]
+    environment:
+      <<: [*agent-urls, *infra-urls]
+    depends_on:
+      redis: {condition: service_healthy}
+      discovery: {condition: service_started}
+    restart: unless-stopped
+
+  payment:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.agent
+      args: [AGENT=agents/payment]
+    ports: ["4003:4003"]
+    env_file: [../../.env]
+    environment:
+      <<: [*agent-urls, *infra-urls]
+    depends_on:
+      redis: {condition: service_healthy}
+      discovery: {condition: service_started}
+      negotiation: {condition: service_started}
+    restart: unless-stopped
+
+  knowledge:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.agent
+      args: [AGENT=agents/knowledge]
+    ports: ["4004:4004"]
+    env_file: [../../.env]
+    environment:
+      <<: [*agent-urls, *infra-urls]
+    depends_on:
+      redis: {condition: service_healthy}
+      chromadb: {condition: service_healthy}
+    restart: unless-stopped
+
+  validator:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.agent
+      args: [AGENT=agents/validator]
+    ports: ["4005:4005"]
+    env_file: [../../.env]
+    environment:
+      <<: [*agent-urls, *infra-urls]
+    depends_on:
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+
+  # ── API + UI ────────────────────────────────────
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.agent
+      args: [AGENT=ui, CMD=api]
+    ports: ["3010:3010"]
+    env_file: [../../.env]
+    environment:
+      <<: [*agent-urls, *infra-urls]
+      API_PORT: 3010
+      ORCHESTRATOR_HOST: orchestrator
+      DISCOVERY_HOST: discovery
+      NEGOTIATION_HOST: negotiation
+      PAYMENT_HOST: payment
+      KNOWLEDGE_HOST: knowledge
+      VALIDATOR_HOST: validator
+    depends_on:
+      redis: {condition: service_healthy}
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.ui
+    ports: ["3002:3002"]
+    env_file: [../../.env]
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:3010
+      NEXT_PUBLIC_WS_URL: ws://localhost:3010
+    depends_on: [api]
+    restart: unless-stopped
+
+  # ── Monitoring ──────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    ports: ["9090:9090"]
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports: ["3003:3000"]
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+    volumes: [grafana-data:/var/lib/grafana]
+    depends_on: [prometheus]
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  chroma-data:
+  pg-data:
+  grafana-data:

@@ -1,0 +1,26 @@
+{
+  "name": "agentic-pay-validator",
+  "version": "1.0.0",
+  "private": true,
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "ts-node-dev --respawn src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.24.0",
+    "@bsv/sdk": "^1.0.0",
+    "@bsv/simple": "^0.2.9",
+    "@bsv/wallet-toolbox": "^1.0.0",
+    "axios": "^1.7.0",
+    "fastify": "^4.27.0",
+    "redis": "^4.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "ts-node": "^10.9.0",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.4.0"
+  }
+}
