@@ -66,21 +66,23 @@ export default function Dashboard() {
     const poll = setInterval(fetchAll, 8000);
 
     function connect() {
-      const ws = new WebSocket(WS_URL);
-      wsRef.current = ws;
-      ws.onopen  = () => setConnected(true);
-      ws.onclose = () => { setConnected(false); setTimeout(connect, 3000); };
-      ws.onerror = () => ws.close();
-      ws.onmessage = (msg) => {
-        try {
-          const data = JSON.parse(msg.data);
-          if (data.type === 'update') {
-            if (data.events?.length) setEvents(prev => [...data.events, ...prev].slice(0, 200));
-            if (data.metrics) setMetrics(prev => ({ ...prev, ...data.metrics } as Metrics));
-            setLastUpdate(Date.now());
-          }
-        } catch { /* ignore */ }
-      };
+      try {
+        const ws = new WebSocket(WS_URL);
+        wsRef.current = ws;
+        ws.onopen  = () => setConnected(true);
+        ws.onclose = () => { setConnected(false); setTimeout(connect, 5000); };
+        ws.onerror = () => ws.close();
+        ws.onmessage = (msg) => {
+          try {
+            const data = JSON.parse(msg.data);
+            if (data.type === 'update') {
+              if (data.events?.length) setEvents(prev => [...data.events, ...prev].slice(0, 200));
+              if (data.metrics) setMetrics(prev => ({ ...prev, ...data.metrics } as Metrics));
+              setLastUpdate(Date.now());
+            }
+          } catch { /* ignore */ }
+        };
+      } catch { /* WS not available, polling only */ }
     }
     connect();
 
@@ -115,6 +117,7 @@ export default function Dashboard() {
 
   const progress = metrics ? Math.min(100, parseFloat(metrics.progressPct)) : 0;
   const onlineCount = agents.filter(a => a.status === 'online').length;
+  const isLive = connected || (lastUpdate > 0 && Date.now() - lastUpdate < 30000);
 
   return (
     <div style={{ background: '#0A0C14', minHeight: '100vh', color: '#ECEFF4', fontFamily: '"Courier New", monospace', padding: '20px 28px' }}>
@@ -132,11 +135,11 @@ export default function Dashboard() {
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
           <div style={{
             padding: '5px 14px', borderRadius: 20, fontSize: 12,
-            background: connected ? '#0D2517' : '#1A0A0A',
-            border: `1px solid ${connected ? '#00B894' : '#D63031'}`,
-            color: connected ? '#00B894' : '#D63031',
+            background: isLive ? '#0D2517' : '#1A0A0A',
+            border: `1px solid ${isLive ? '#00B894' : '#D63031'}`,
+            color: isLive ? '#00B894' : '#D63031',
           }}>
-            {connected ? '● Live' : '○ Connecting...'}
+            {isLive ? '● Live' : '○ Connecting...'}
           </div>
           {lastUpdate > 0 && (
             <div style={{ fontSize: 10, color: '#636E82' }}>

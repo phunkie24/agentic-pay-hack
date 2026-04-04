@@ -40,7 +40,7 @@ async function start(): Promise<void> {
     const results = await Promise.allSettled(
       roles.map(async (role) => {
         const resp = await axios.get(agentUrl(role, '/health'), { timeout: 2000 });
-        return { role, status: 'online', ...resp.data };
+        return { ...resp.data, role, status: 'online' };
       })
     );
     return {
