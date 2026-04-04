@@ -3,7 +3,7 @@ import { useEffect, useState, useRef } from 'react';
 
 interface AgentStatus {
   role: string;
-  status: 'online' | 'offline';
+  status: 'online' | 'offline' | 'ok';
   identityKey?: string;
   totalTxLogged?: number;
   discoveredCount?: number;
@@ -116,7 +116,7 @@ export default function Dashboard() {
   }
 
   const progress = metrics ? Math.min(100, parseFloat(metrics.progressPct)) : 0;
-  const onlineCount = agents.filter(a => a.status === 'online').length;
+  const onlineCount = agents.filter(a => a.status === 'online' || a.status === 'ok').length;
   const isLive = connected || (lastUpdate > 0 && Date.now() - lastUpdate < 30000);
 
   return (
@@ -200,8 +200,8 @@ export default function Dashboard() {
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                 padding: '10px 12px', marginBottom: 6, borderRadius: 8,
                 background: '#0A0C14',
-                borderLeft: `3px solid ${agent.status === 'online' ? (ROLE_COLOR[agent.role] ?? '#636E82') : '#2E3250'}`,
-                opacity: agent.status === 'online' ? 1 : 0.5,
+                borderLeft: `3px solid ${agent.status !== 'offline' ? (ROLE_COLOR[agent.role] ?? '#636E82') : '#2E3250'}`,
+                opacity: agent.status !== 'offline' ? 1 : 0.5,
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontSize: 16 }}>{ROLE_ICON[agent.role] ?? '🤖'}</span>
@@ -221,8 +221,8 @@ export default function Dashboard() {
                   {agent.activeNegotiations != null && <div>{agent.activeNegotiations} negotiating</div>}
                   {agent.totalTxLogged      != null && <div>{agent.totalTxLogged} tx</div>}
                   {agent.validatedCount     != null && <div>{agent.validatedCount} validated</div>}
-                  <div style={{ color: agent.status === 'online' ? '#00B894' : '#D63031', marginTop: 2 }}>
-                    {agent.status === 'online' ? '● online' : '○ offline'}
+                  <div style={{ color: agent.status !== 'offline' ? '#00B894' : '#D63031', marginTop: 2 }}>
+                    {agent.status !== 'offline' ? '● online' : '○ offline'}
                   </div>
                 </div>
               </div>
