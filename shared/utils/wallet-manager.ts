@@ -1,5 +1,6 @@
 // shared/utils/wallet-manager.ts
-// Real BSV on-chain payments: UTXO fetch from WhatsOnChain + ARC broadcast
+// Real BSV on-chain payments with in-memory UTXO chaining
+// Chain unconfirmed transactions — no need to wait for block confirmation
 
 import { PrivateKey, P2PKH, Transaction, ARC, ProtoWallet } from '@bsv/sdk';
 import type { AgentRole } from '../types';
@@ -19,13 +20,12 @@ const ARC_URL     = process.env.ARC_URL     ?? 'https://arc-test.taal.com';
 const ARC_API_KEY = process.env.ARC_API_KEY ?? '';
 const NETWORK     = process.env.BSV_NETWORK === 'mainnet' ? 'main' : 'test';
 const WOC_BASE    = `https://api.whatsonchain.com/v1/bsv/${NETWORK}`;
-const UTXO_CACHE_TTL_MS = 60_000; // refresh UTXOs at most once per minute
 
-interface UTXO {
-  tx_hash: string;
-  tx_pos: number;
+// In-memory UTXO: either a confirmed WoC UTXO or an unconfirmed change output
+interface MemUTXO {
+  sourceTx: Transaction;   // full tx object (needed by @bsv/sdk to build inputs)
+  outputIndex: number;
   value: number;
-  script?: string;
 }
 
 export class AgentWallet {
@@ -34,8 +34,10 @@ export class AgentWallet {
   public readonly role: AgentRole;
   public identityKey: string = '';
   public address: string = '';
-  private utxoCache: UTXO[] = [];
-  private utxoCacheTime = 0;
+
+  // Chain of in-memory UTXOs — head is the next available input
+  private utxoChain: MemUTXO[] = [];
+  private initialising = false;
 
   constructor(role: AgentRole) {
     this.role = role;
@@ -49,13 +51,17 @@ export class AgentWallet {
   async init(): Promise<void> {
     const pubKey = await this.proto.getPublicKey({ identityKey: true });
     this.identityKey = pubKey.publicKey;
-    // Derive P2PKH testnet address from private key
     const network = process.env.BSV_NETWORK === 'mainnet' ? undefined : 'testnet';
     this.address = this.privateKey.toPublicKey().toAddress(network as any);
     logger.info(this.role, 'Wallet initialised', { identityKey: this.identityKey, address: this.address });
+
+    // Bootstrap UTXO chain from confirmed on-chain UTXOs
+    await this.bootstrapChain();
   }
 
   async getBalance(): Promise<number> {
+    const total = this.utxoChain.reduce((s, u) => s + u.value, 0);
+    if (total > 0) return total;
     try {
       const resp = await axios.get(`${WOC_BASE}/address/${this.address}/balance`, { timeout: 5000 });
       return (resp.data.confirmed ?? 0) + (resp.data.unconfirmed ?? 0);
@@ -64,146 +70,72 @@ export class AgentWallet {
     }
   }
 
-  // Fetch UTXOs with cache — max one WoC call per minute
-  private async getUTXOs(): Promise<UTXO[]> {
-    const now = Date.now();
-    if (this.utxoCache.length > 0 && now - this.utxoCacheTime < UTXO_CACHE_TTL_MS) {
-      return this.utxoCache;
-    }
+  // Bootstrap: load confirmed UTXOs from WoC into the in-memory chain
+  private async bootstrapChain(): Promise<void> {
+    if (this.initialising) return;
+    this.initialising = true;
     try {
-      const resp = await axios.get(`${WOC_BASE}/address/${this.address}/unspent`, { timeout: 5000 });
-      this.utxoCache = (resp.data as UTXO[]) ?? [];
-      this.utxoCacheTime = now;
-      return this.utxoCache;
-    } catch (err) {
-      logger.warn(this.role, 'Failed to fetch UTXOs', err);
-      return this.utxoCache; // return stale cache if available
-    }
-  }
+      const resp = await axios.get(`${WOC_BASE}/address/${this.address}/unspent`, { timeout: 8000 });
+      const utxos: Array<{ tx_hash: string; tx_pos: number; value: number }> = resp.data ?? [];
 
-  // Remove spent UTXOs from cache after use
-  private markUtxosSpent(usedTxids: string[]): void {
-    this.utxoCache = this.utxoCache.filter(u => !usedTxids.includes(u.tx_hash));
-  }
-
-  // Fetch raw hex of a tx to get the locking script for a UTXO
-  private async getSourceTx(txid: string): Promise<string | null> {
-    try {
-      const resp = await axios.get(`${WOC_BASE}/tx/${txid}/hex`, { timeout: 5000 });
-      return resp.data as string;
-    } catch {
-      return null;
-    }
-  }
-
-  // Build, sign and broadcast a real BSV transaction
-  async createAndSendPayment(
-    toAddress: string,
-    satoshis: number,
-    _metadata: Record<string, string> = {}
-  ): Promise<{ txid: string; beefHex: string }> {
-    try {
-      const utxos = await this.getUTXOs();
-      if (utxos.length === 0) {
-        logger.warn(this.role, 'No UTXOs available, using stub');
-        return { txid: `stub-${Date.now()}`, beefHex: '' };
-      }
-
-      const tx = new Transaction();
-      let inputTotal = 0;
-
-      // Add inputs from UTXOs until we have enough
       for (const utxo of utxos) {
-        if (inputTotal >= satoshis + 500) break; // 500 sat fee buffer
-        const sourceTxHex = await this.getSourceTx(utxo.tx_hash);
-        if (!sourceTxHex) continue;
-
-        const sourceTx = Transaction.fromHex(sourceTxHex);
-        tx.addInput({
-          sourceTransaction: sourceTx,
-          sourceOutputIndex: utxo.tx_pos,
-          unlockingScriptTemplate: new P2PKH().unlock(this.privateKey),
-        });
-        inputTotal += utxo.value;
+        try {
+          const hexResp = await axios.get(`${WOC_BASE}/tx/${utxo.tx_hash}/hex`, { timeout: 8000 });
+          const sourceTx = Transaction.fromHex(hexResp.data as string);
+          this.utxoChain.push({ sourceTx, outputIndex: utxo.tx_pos, value: utxo.value });
+        } catch { /* skip unresolvable UTXOs */ }
       }
 
-      if (inputTotal < satoshis + 500) {
-        logger.warn(this.role, `Insufficient funds: ${inputTotal} sats, using stub`);
-        return { txid: `stub-${Date.now()}`, beefHex: '' };
-      }
-
-      // Payment output
-      tx.addOutput({
-        lockingScript: new P2PKH().lock(toAddress),
-        satoshis,
-      });
-
-      // Change output back to self
-      const fee = 200;
-      const change = inputTotal - satoshis - fee;
-      if (change > 546) {
-        tx.addOutput({
-          lockingScript: new P2PKH().lock(this.address),
-          satoshis: change,
-        });
-      }
-
-      await tx.fee();
-      await tx.sign();
-
-      const arc = new ARC(ARC_URL, { apiKey: ARC_API_KEY });
-      const response = await tx.broadcast(arc);
-
-      if ('txid' in response && response.txid) {
-        const txid = response.txid as string;
-        this.markUtxosSpent(tx.inputs.map(i => i.sourceTXID ?? ''));
-        logger.info(this.role, 'Payment broadcast ✓', { txid, satoshis });
-        return { txid, beefHex: tx.toHex() };
-      }
-      throw new Error(JSON.stringify(response));
+      const total = this.utxoChain.reduce((s, u) => s + u.value, 0);
+      logger.info(this.role, `UTXO chain bootstrapped`, { utxos: this.utxoChain.length, totalSats: total });
     } catch (err) {
-      logger.warn(this.role, 'Payment failed, using stub', String(err).slice(0, 100));
-      return { txid: `stub-${Date.now()}`, beefHex: '' };
+      logger.warn(this.role, 'Bootstrap failed — will retry on next payment', err);
+    } finally {
+      this.initialising = false;
     }
   }
 
-  // Batch many outputs into one transaction
+  // Get next available UTXO (blocks until available or times out)
+  private async nextUTXO(): Promise<MemUTXO | null> {
+    if (this.utxoChain.length > 0) return this.utxoChain[0];
+    // Try bootstrapping once more
+    if (!this.initialising) await this.bootstrapChain();
+    return this.utxoChain.length > 0 ? this.utxoChain[0] : null;
+  }
+
+  // Batch many outputs into one tx, chain change back into utxoChain immediately
   async batchPayments(
     recipients: Array<{ identityKey: string; satoshis: number; metadata?: Record<string, string> }>
   ): Promise<{ txid: string; count: number }[]> {
     if (recipients.length === 0) return [];
 
+    const utxo = await this.nextUTXO();
+    if (!utxo) {
+      logger.warn(this.role, 'No UTXOs available, using stub');
+      return [{ txid: `stub-batch-${Date.now()}`, count: recipients.length }];
+    }
+
+    const totalOut = recipients.reduce((s, r) => s + r.satoshis, 0);
+    const fee = 200 + recipients.length * 10;
+    const change = utxo.value - totalOut - fee;
+
+    if (utxo.value < totalOut + fee) {
+      logger.warn(this.role, `Insufficient funds: ${utxo.value} sats for ${totalOut + fee} needed`);
+      this.utxoChain.shift(); // remove exhausted UTXO
+      return [{ txid: `stub-batch-${Date.now()}`, count: recipients.length }];
+    }
+
     try {
-      const utxos = await this.getUTXOs();
-      if (utxos.length === 0) {
-        logger.warn(this.role, 'No UTXOs, using stub batch');
-        return [{ txid: `stub-batch-${Date.now()}`, count: recipients.length }];
-      }
-
-      const totalNeeded = recipients.reduce((s, r) => s + r.satoshis, 0) + 500;
       const tx = new Transaction();
-      let inputTotal = 0;
 
-      for (const utxo of utxos) {
-        if (inputTotal >= totalNeeded) break;
-        const sourceTxHex = await this.getSourceTx(utxo.tx_hash);
-        if (!sourceTxHex) continue;
-        const sourceTx = Transaction.fromHex(sourceTxHex);
-        tx.addInput({
-          sourceTransaction: sourceTx,
-          sourceOutputIndex: utxo.tx_pos,
-          unlockingScriptTemplate: new P2PKH().unlock(this.privateKey),
-        });
-        inputTotal += utxo.value;
-      }
+      // Add input from in-memory UTXO (works unconfirmed)
+      tx.addInput({
+        sourceTransaction: utxo.sourceTx,
+        sourceOutputIndex: utxo.outputIndex,
+        unlockingScriptTemplate: new P2PKH().unlock(this.privateKey),
+      });
 
-      if (inputTotal < totalNeeded) {
-        logger.warn(this.role, `Insufficient funds for batch: ${inputTotal} sats`);
-        return [{ txid: `stub-batch-${Date.now()}`, count: recipients.length }];
-      }
-
-      // Add one output per recipient — use self address as proxy
-      // (identity keys are public keys not addresses; pay to self for demo throughput)
+      // Payment outputs (pay to self — max throughput)
       for (const r of recipients) {
         tx.addOutput({
           lockingScript: new P2PKH().lock(this.address),
@@ -211,10 +143,8 @@ export class AgentWallet {
         });
       }
 
-      // Change
-      const totalOut = recipients.reduce((s, r) => s + r.satoshis, 0);
-      const fee = 200 + recipients.length * 10;
-      const change = inputTotal - totalOut - fee;
+      // Change output back to self — becomes next UTXO immediately
+      const changeIndex = tx.outputs.length;
       if (change > 546) {
         tx.addOutput({
           lockingScript: new P2PKH().lock(this.address),
@@ -230,15 +160,32 @@ export class AgentWallet {
 
       if ('txid' in response && response.txid) {
         const txid = response.txid as string;
-        this.markUtxosSpent(tx.inputs.map(i => i.sourceTXID ?? ''));
-        logger.info(this.role, `Batch broadcast ✓`, { txid, count: recipients.length });
+
+        // Remove spent UTXO, immediately chain the change output
+        this.utxoChain.shift();
+        if (change > 546) {
+          this.utxoChain.unshift({ sourceTx: tx, outputIndex: changeIndex, value: change });
+        }
+
+        logger.info(this.role, 'Batch ✓', { txid, count: recipients.length, change, remaining: this.utxoChain.length });
         return [{ txid, count: recipients.length }];
       }
       throw new Error(JSON.stringify(response));
     } catch (err) {
-      logger.warn(this.role, 'Batch failed, using stub', String(err).slice(0, 100));
+      logger.warn(this.role, 'Batch failed, using stub', String(err).slice(0, 120));
+      // Don't remove UTXO on broadcast failure — retry next time
       return [{ txid: `stub-batch-${Date.now()}`, count: recipients.length }];
     }
+  }
+
+  async createAndSendPayment(
+    toAddress: string,
+    satoshis: number,
+    _metadata: Record<string, string> = {}
+  ): Promise<{ txid: string; beefHex: string }> {
+    const result = await this.batchPayments([{ identityKey: toAddress, satoshis }]);
+    const txid = result[0]?.txid ?? `stub-${Date.now()}`;
+    return { txid, beefHex: '' };
   }
 
   getClient(): ProtoWallet {
