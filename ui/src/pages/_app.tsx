@@ -11,7 +11,8 @@ export default function App({ Component, pageProps }: AppProps) {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" href="/favicon.ico" />
       </Head>
-      <style global jsx>{`
+      {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+      <style global jsx {...({} as any)}>{`
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { background: #0F1117; color: #ECEFF4; }
         ::-webkit-scrollbar { width: 6px; }
