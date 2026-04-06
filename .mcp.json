@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "bsv-simple": {
+      "command": "node",
+      "args": ["./node_modules/@bsv/simple-mcp/dist/index.js"]
+    }
+  }
+}

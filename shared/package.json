@@ -10,9 +10,11 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.24.0",
     "@bsv/sdk": "^1.0.0",
+    "@bsv/simple": "^0.2.9",
+    "@bsv/simple-mcp": "^0.0.2",
     "@bsv/wallet-toolbox": "^1.0.0",
-    "redis": "^4.6.0",
-    "chromadb": "^1.8.0"
+    "chromadb": "^1.8.0",
+    "redis": "^4.6.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
