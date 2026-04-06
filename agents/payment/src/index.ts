@@ -252,10 +252,8 @@ class PaymentAgent {
   }
 
   // ── Resource-Aware Optimization (Ch.16) ──
-  private async optimizeBatchSize(balance: number, remainingTarget: number): Promise<number> {
-    if (balance < 1000) return 10;  // Low balance → small batches
-    if (remainingTarget > 100_000) return PAYMENT.BATCH_SIZE;
-    return Math.min(PAYMENT.BATCH_SIZE, remainingTarget);
+  private async optimizeBatchSize(_balance: number, remainingTarget: number): Promise<number> {
+    return Math.min(PAYMENT.BATCH_SIZE, Math.max(remainingTarget, 100));
   }
 
   private async notifyValidator(tx: PaymentTransaction): Promise<void> {

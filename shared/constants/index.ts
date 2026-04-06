@@ -27,11 +27,11 @@ export const NEGOTIATION = {
 } as const;
 
 export const PAYMENT = {
-  BATCH_SIZE:         500,   // tx per batch
-  BATCH_INTERVAL_MS:  50,    // ms between batches → ~10 batches/sec → 300k/hr
+  BATCH_SIZE:         1000,  // outputs per batch tx
+  BATCH_INTERVAL_MS:  100,   // ms between batches
   TARGET_TX_24H:      1_500_000,
   MIN_FEE_SATS:       1,
-  DEFAULT_AMOUNT_SATS:10,
+  DEFAULT_AMOUNT_SATS:1,     // 1 sat per output — maximise tx count per BSV
 } as const;
 
 export const REDIS_KEYS = {
