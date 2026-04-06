@@ -17,7 +17,8 @@ const ENV_KEY_MAP: Record<AgentRole, string> = {
 
 const ARC_URL     = process.env.ARC_URL     ?? 'https://arc-test.taal.com';
 const ARC_API_KEY = process.env.ARC_API_KEY ?? '';
-const WOC_BASE    = 'https://api.whatsonchain.com/v1/bsv/test'; // testnet
+const NETWORK     = process.env.BSV_NETWORK === 'mainnet' ? 'main' : 'test';
+const WOC_BASE    = `https://api.whatsonchain.com/v1/bsv/${NETWORK}`;
 const UTXO_CACHE_TTL_MS = 60_000; // refresh UTXOs at most once per minute
 
 interface UTXO {
@@ -49,7 +50,8 @@ export class AgentWallet {
     const pubKey = await this.proto.getPublicKey({ identityKey: true });
     this.identityKey = pubKey.publicKey;
     // Derive P2PKH testnet address from private key
-    this.address = this.privateKey.toPublicKey().toAddress('testnet');
+    const network = process.env.BSV_NETWORK === 'mainnet' ? undefined : 'testnet';
+    this.address = this.privateKey.toPublicKey().toAddress(network as any);
     logger.info(this.role, 'Wallet initialised', { identityKey: this.identityKey, address: this.address });
   }
 
