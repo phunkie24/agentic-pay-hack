@@ -18,6 +18,7 @@ const ENV_KEY_MAP: Record<AgentRole, string> = {
 const ARC_URL     = process.env.ARC_URL     ?? 'https://arc-test.taal.com';
 const ARC_API_KEY = process.env.ARC_API_KEY ?? '';
 const WOC_BASE    = 'https://api.whatsonchain.com/v1/bsv/test'; // testnet
+const UTXO_CACHE_TTL_MS = 60_000; // refresh UTXOs at most once per minute
 
 interface UTXO {
   tx_hash: string;
@@ -32,6 +33,8 @@ export class AgentWallet {
   public readonly role: AgentRole;
   public identityKey: string = '';
   public address: string = '';
+  private utxoCache: UTXO[] = [];
+  private utxoCacheTime = 0;
 
   constructor(role: AgentRole) {
     this.role = role;
@@ -59,15 +62,26 @@ export class AgentWallet {
     }
   }
 
-  // Fetch UTXOs for this wallet from WhatsOnChain
+  // Fetch UTXOs with cache — max one WoC call per minute
   private async getUTXOs(): Promise<UTXO[]> {
+    const now = Date.now();
+    if (this.utxoCache.length > 0 && now - this.utxoCacheTime < UTXO_CACHE_TTL_MS) {
+      return this.utxoCache;
+    }
     try {
       const resp = await axios.get(`${WOC_BASE}/address/${this.address}/unspent`, { timeout: 5000 });
-      return (resp.data as UTXO[]) ?? [];
+      this.utxoCache = (resp.data as UTXO[]) ?? [];
+      this.utxoCacheTime = now;
+      return this.utxoCache;
     } catch (err) {
       logger.warn(this.role, 'Failed to fetch UTXOs', err);
-      return [];
+      return this.utxoCache; // return stale cache if available
     }
+  }
+
+  // Remove spent UTXOs from cache after use
+  private markUtxosSpent(usedTxids: string[]): void {
+    this.utxoCache = this.utxoCache.filter(u => !usedTxids.includes(u.tx_hash));
   }
 
   // Fetch raw hex of a tx to get the locking script for a UTXO
@@ -140,6 +154,7 @@ export class AgentWallet {
 
       if ('txid' in response && response.txid) {
         const txid = response.txid as string;
+        this.markUtxosSpent(tx.inputs.map(i => i.sourceTXID ?? ''));
         logger.info(this.role, 'Payment broadcast ✓', { txid, satoshis });
         return { txid, beefHex: tx.toHex() };
       }
@@ -213,6 +228,7 @@ export class AgentWallet {
 
       if ('txid' in response && response.txid) {
         const txid = response.txid as string;
+        this.markUtxosSpent(tx.inputs.map(i => i.sourceTXID ?? ''));
         logger.info(this.role, `Batch broadcast ✓`, { txid, count: recipients.length });
         return [{ txid, count: recipients.length }];
       }
