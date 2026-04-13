@@ -16,11 +16,14 @@ RUN npm config set fetch-retries 5 && \
     npm config set fetch-retry-maxtimeout 120000 && \
     npm install --workspace=${AGENT} --include-workspace-root
 
-# Build
-RUN cd ${AGENT} && npx tsc --project tsconfig.json || true
+# Copy tsconfig for agents
+COPY agents/tsconfig.base.json ./agents/tsconfig.base.json
+
+# Build — tsconfig.json now exists in each agent dir
+RUN cd ${AGENT} && npx tsc --project tsconfig.json && echo "Build OK" || echo "Build failed, will use ts-node fallback"
 
 ENV NODE_ENV=production
 ENV AGENT_PATH=${AGENT}
 ENV CMD=${CMD}
 
-CMD ["sh", "-c", "cd $AGENT_PATH && npm run $CMD 2>/dev/null || npx ts-node --transpile-only src/index.ts"]
+CMD ["sh", "-c", "cd $AGENT_PATH && npm run $CMD || npx ts-node --transpile-only src/index.ts"]
