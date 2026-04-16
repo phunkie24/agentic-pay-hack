@@ -19,6 +19,7 @@ export class EventBus {
   async connect(): Promise<void> {
     await this.pub.connect();
     await this.sub.connect();
+    (global as any).__agentRedis = this.pub; // expose for wallet chain-state persistence
     logger.info('event-bus', 'Redis connected');
   }
 
